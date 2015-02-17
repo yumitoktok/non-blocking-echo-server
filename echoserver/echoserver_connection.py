@@ -7,6 +7,8 @@ Created on 15 Feb 2015
 import logging
 logger = logging.getLogger(__name__)
 
+from socket import error as socket_error
+
 import Queue
 
 class EchoServerConnection():
@@ -24,35 +26,43 @@ class EchoServerConnection():
         return self._client_address
     
     def recieve(self):
-        data = self._connection.recv(1024)
-        if data:
-            
-            # TODO: Check data is meaningful & secure
-            logger.info("Received %s from %s" % (data, self._connection.getpeername()))
-                       
-            nl = data.rfind("\n")
-            if nl > 0:
-                self.buildOutputQueue(data[:nl])
-                if nl >= len(data):
-                    self._wait_queue.put(data[nl:])
+        try:
+            data = self._connection.recv(1024) # Only receive 1024 bytes per line. Sensible to limit to help mitigate DenialOfService
+            if data:
+                
+                # TODO: Check data is meaningful & secure
+                logger.info("Received %s from %s" % (data, self._connection.getpeername()))
+                           
+                nl = data.rfind("\n")
+                if nl > 0:
+                    self.buildOutputQueue(data[:nl])
+                    if nl >= len(data):
+                        self._wait_queue.put(data[nl:])
+                        
+                else:
+                    logger.debug("No carriage return, storing")
+                    self._wait_queue.put(data)
                     
             else:
-                logger.debug("No carriage return, storing")
-                self._wait_queue.put(data)
+                logger.info("No data recieved from %s, closing connection" % (self._connection.getpeername(),))
+                self.close()
                 
-        else:
-            logger.info("No data recieved from %s, closing connection" % (self._connection.getpeername(),))
-            self.close()
-        
+        except socket_error as serr:
+            raise EchoServerConnectionDisconnectException(self._connection, "%s" % (serr.errno,))
+  
     
-    def send(self):
+    def flush(self):
         # Check chunks
         try:
             while True:
                 self._connection.send(self._output_queue.get_nowait())
         except Queue.Empty:
             pass
-    
+        except socket_error as serr:
+            raise EchoServerConnectionDisconnectException(self, "%s" % (serr.errno,))
+
+                
+                
     
     def buildOutputQueue(self,last):
         try:    
@@ -75,5 +85,14 @@ class EchoServerConnection():
         
     def isWaitingOutput(self):
         return not self._wait_queue.empty()     
-        
+    
+    
+     
+class EchoServerConnectionDisconnectException(Exception):
+    
+    def __init__(self, c, message):
+        self.echoserver_connection = c
+        self.message = message
+    
+       
     
